@@ -1,0 +1,174 @@
+---
+title: "Coursera - Reproducible Research W2 Project"
+author: "Juan Zacarias"
+date: "August 7, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading and preprocessing data
+
+```{r activity, message=FALSE, warning=FALSE}
+#Loading libraries
+library(zip)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(timeDate)
+
+```
+
+```{r}
+#Loading and unziping data
+urlfile <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2Factivity.zip"
+download.file(urlfile,"amd.zip")
+unzip("amd.zip")
+activity <- read.csv("activity.csv")
+
+#Having a first look to structure and data
+str(activity)
+head(activity)
+
+#Transforming column date from string to date data type
+activity$date <- ymd(activity$date)
+
+#Checking for NA proportion by column
+colMeans(is.na(activity))
+
+#Making a further analysis on NA values
+  # 1. NA values are only present on the column steps. Moving dates with NA values and analyzing number of NA per date
+    activityNA <- subset(activity,is.na(steps))
+    aggregate(interval~date, data = activityNA, length)
+  # 2. Number of rows per date in non NA steps dates is 288 for each day.
+    summary(aggregate(steps~date, data = activity, length))
+    
+#A total of 8 dates register NA values for each amount of steps per interval. 
+#For now, I will continue analyzing the data without the NA dates.
+activitynonNA <- subset(activity, !is.na(steps))
+
+```
+
+
+## What is the total number of steps taken per day?
+
+```{r}
+#1. Calculating the sum of steps per day and saving it
+daily_steps <- aggregate(steps~date, activitynonNA, sum)
+
+#2. Plotting the sum of daily steps
+p1<- ggplot(data=daily_steps)
+p1+aes(steps)+geom_histogram(bins=20,color="black",fill="#66CC99", alpha=.5) + 
+  ggtitle("Total Steps per Day") + theme(plot.title = element_text(hjust = 0.5))
+
+#3. Calculating the mean and median of the total number of steps taken per day
+mean(daily_steps$steps)
+median(daily_steps$steps)
+
+```
+
+
+
+## What is the average daily activity pattern?
+
+```{r}
+#1. Making a time series plot (i.e. type = "l") of the 5-minute interval (x-axis) 
+  # Creating a set with the steps per interval
+  interval_stepsAvg <- aggregate(steps~interval, activitynonNA, mean)
+  
+  #Plot
+  p2<- ggplot(data=interval_stepsAvg, aes(interval, steps))
+  p2 + geom_line() + ggtitle("Avg steps per interval") + theme(plot.title = element_text(hjust = 0.5))
+
+#2. Which 5-minute interval, on average across all the days, contains the maximum number of steps
+interval_stepsAvg[which.max(interval_stepsAvg$steps),1]
+
+```
+
+## Imputing missing values
+
+This section requires a strategy for filling all missing values. 
+Previously we discover that 8 dates have recorded NA values on the steps column for every interval. My strategy will consist in using the average number of steps for each interval on the same weekdays in the dataset that do contain steps information. 
+Ex: One of the NA steps date is 01-10-2012. Since that date is a MONDAY I will calculate the average steps in each interval of the other MONDAYS that do have information about the number of steps and use that result accordingly to replace the missing NA value.
+
+```{r}
+#Calculating  the total number of missing values in the dataset
+colSums(is.na(activity))
+
+#Creating a paralel dataset where the missing values will be replaced
+activityNAfilled <- activity
+
+#Implementing Strategy
+  # 1. Creating dataset with the average number of steps per interval per weekday
+    AvStepsperweekday<-aggregate(steps~interval + weekdays(date), activity, mean)
+    names(AvStepsperweekday) <- c("interval", "weekday", "steps")
+    
+  # 2. Replacing Missing values with the average steps per interval per weekday
+    for(i in 1:nrow(activityNAfilled)){
+  
+      if (is.na(activityNAfilled[i,1])){
+        activityNAfilled[i,1] <- AvStepsperweekday[AvStepsperweekday$interval==activityNAfilled[i,3] & 
+                                          AvStepsperweekday$weekday==weekdays(activityNAfilled[i,2]),3]
+      }
+  
+    }
+    
+    colSums(is.na(activityNAfilled))
+
+#Calculating the new sum of steps per day and saving it
+daily_stepsNAfilled <- aggregate(steps~date, activityNAfilled, sum)
+
+#Plotting the sum of daily steps
+p3<- ggplot(data=daily_stepsNAfilled)
+p3+aes(steps)+geom_histogram(bins=20,color="black",fill="#66CC99", alpha=.5) + 
+  ggtitle("New Total Steps per Day") + theme(plot.title = element_text(hjust = 0.5))
+
+#Calculating the mean and median of the total number of steps taken per day
+mean(daily_stepsNAfilled$steps)
+median(daily_stepsNAfilled$steps)
+
+# What is the impact of imputing missing data on the estimates of the total daily number of steps?
+par(mfrow =c(1,2))
+boxplot(daily_steps$steps, main= "Steps in Dataset without NAs")
+abline(h=mean(daily_steps$steps), col="green")
+boxplot(daily_stepsNAfilled$steps, main= "Steps Dataset with replaced NAs")
+abline(h=mean(daily_stepsNAfilled$steps), col ="blue")
+```
+We can notice a slighty increase in the mean and median of the number of steps per day when we replace the NA value.
+
+
+## Are there differences in activity patterns between weekdays and weekends?
+
+For this section, I will need to add an aditional column to calculate and include the factors "weekday" and "weekend" according to the date of the observation. I will keep using the new dataset with NA values filled.
+
+```{r,patterns}
+#Creating new column and adding factor accordingly. 
+for( i in 1:nrow(activityNAfilled)){
+  if(isWeekday(activityNAfilled[i,2])){
+    activityNAfilled[i,4] <- "weekdays"
+  }
+  else{
+    activityNAfilled[i,4] <- "weekends"
+  }
+}
+
+#Renaming column and making it a factor column
+names(activityNAfilled)[4]<- "daytype"
+activityNAfilled$daytype <- as.factor(activityNAfilled$daytype)
+str(activityNAfilled)
+
+#Make a panel plot containing a time series plot type="l" of the 5-minute interval (x-axis)
+#and the average number of steps taken, averaged across all weekday days or weekend days (y-axis).
+
+  #1. Calculating the average per interval for the new table 
+  interval_stepsAvgNAfilled <- aggregate(steps~interval+daytype, activityNAfilled, mean)
+
+  #2. Making the plot
+  p4 <- ggplot(data = interval_stepsAvgNAfilled, aes(interval,steps, col=daytype))
+  p4 + geom_line() + facet_grid(interval_stepsAvgNAfilled$daytype~.) +theme(legend.position = "none") + 
+    ggtitle("Avg Steps per Interval by Type of Day") + theme(plot.title = element_text(hjust = 0.5))
+
+
+```
